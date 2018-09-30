@@ -5,6 +5,7 @@ const int D_4 = 261;
 const int E_4 = 293;
 const int F_4 = 349;
 const int G_4 = 392;
+const int G_4_SHARP = 415;
 const int A_4 = 440;
 const int C_5 = 523;
 const int E_5 = 659;
@@ -83,16 +84,24 @@ void indicateEnd() {
   play(C_6, lenQuarter, lenHalf);
 }
 
+
+void indicateNotRunning() {
+  play(C_5, len8th, lenQuarter);
+  play(C_5, len8th, lenQuarter);
+  play(C_5, len8th, lenQuarter);
+  play(G_4_SHARP, lenHalf, lenHalf);  
+}
+
 void indicateSuccess() { 
-  for(byte i = 0; i < 6; i++){
-    play(A_5, len8th, lenQuarter); 
-  }
+  play(C_5, len16th, len8th);  
+  play(G_5, len8th, lenQuarter);
+  play(C_5, len16th, len8th);
+  play(G_5, lenQuarter, lenHalf);
 }
 
 void indicateDuplicate() {
-  for(byte i = 0; i < 2; i++){
+  for(byte i = 0; i < 4; i++){
     play(A_5, len8th, lenQuarter); 
-    play(A_4, len8th, lenQuarter); 
   }
 }
 
@@ -120,16 +129,24 @@ void startRun() {
     checkintimes[i] = 0;    
   }
   startTime = millis();
+  delay(3000);
 }
 
 void checkIn(long id){
 
+  if(!isRunning){
+    indicateNotRunning();
+    delay(3000);
+    return;  
+  }
+  
   int index = getPostIndex(id);
   
   if(index == postCount){
     indicateUnknown();
     Serial.print("Ukjent id");
     printId(id);
+    delay(3000);
     return;
   }
 
@@ -208,6 +225,7 @@ void endRun() {
   Serial.println(""); 
   getResults(); 
   indicateEnd();
+  delay(3000);
 }
 
 void setup() {
