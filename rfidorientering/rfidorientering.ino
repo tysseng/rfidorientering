@@ -1,5 +1,19 @@
-#include <Adafruit_PN532.h>
+//#define ADAFRUIT
+
 #include <Wire.h>
+#ifdef ADAFRUIT
+  #include <Adafruit_PN532.h>
+  int PN532_IRQ = 7;
+  int PN532_RESET = 6;  
+  Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
+#else
+  #include <PN532_I2C.h>
+  #include <PN532.h>
+  #include <NfcAdapter.h>
+  PN532_I2C intf(Wire);
+  PN532 nfc = PN532(intf);
+#endif
+
 
 const int D_4 = 261;
 const int E_4 = 293;
@@ -21,10 +35,7 @@ const short lenHalf = 8;
 // CONFIG
 int PIEZO_PIN = 9;
 int LED_PIN = 8;
-int PN532_IRQ = 7;
-int PN532_RESET = 6;
 
-Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 
 const int postCount = 4;
 unsigned long posts[] = {
@@ -238,6 +249,11 @@ void setup() {
   #endif
   Serial.begin(9600);
   Serial.println("Starter orienteringsklokke");
+  #ifdef ADAFRUIT
+    Serial.println("Bruker Adafruit-bibliotek");
+  #else
+    Serial.println("Bruker Seeed-Studio-bibliotek");
+  #endif
 
   nfc.begin();
 
