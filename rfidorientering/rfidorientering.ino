@@ -1,19 +1,31 @@
-//#define ADAFRUIT
+#include "emulatetag.h"
+#include "NdefMessage.h"
 
-#include <Wire.h>
-#ifdef ADAFRUIT
-  #include <Adafruit_PN532.h>
-  int PN532_IRQ = 7;
-  int PN532_RESET = 6;  
-  Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
-#else
-  #include <PN532_I2C.h>
-  #include <PN532.h>
-  #include <NfcAdapter.h>
-  PN532_I2C intf(Wire);
-  PN532 nfc = PN532(intf);
-#endif
+#include <SPI.h>
+#include <PN532_SPI.h>
+#include <PN532Interface.h>
+#include <PN532.h>
 
+PN532_SPI interface(SPI, 10);
+EmulateTag tagEmulator(interface); // Create EmulateTag instance called nfc
+
+PN532 EmulateTag::getPn532(){
+   return pn532;
+}
+PN532 reader = tagEmulator.getPn532();
+
+// The following must be added to PN532/emulatetag.cpp:
+// PN532 EmulateTag::getPn532(){
+//   return pn532;
+// }
+
+
+
+uint8_t ndefBuf[120];
+NdefMessage message;
+int messageSize;
+
+uint8_t uid[3] = { 0x12, 0x34, 0x56 };
 
 const int D_4 = 261;
 const int E_4 = 293;
@@ -247,17 +259,14 @@ void setup() {
   #ifndef ESP8266
     while (!Serial); // for Leonardo/Micro/Zero
   #endif
-  Serial.begin(9600);
+  Serial.begin(115200);
   Serial.println("Starter orienteringsklokke");
-  #ifdef ADAFRUIT
-    Serial.println("Bruker Adafruit-bibliotek");
-  #else
-    Serial.println("Bruker Seeed-Studio-bibliotek");
-  #endif
 
-  nfc.begin();
+  // uid must be 3 bytes!
+  tagEmulator.setUid(uid);  
+  tagEmulator.init();
 
-  uint32_t versiondata = nfc.getFirmwareVersion();
+  uint32_t versiondata = reader.getFirmwareVersion();
   if (! versiondata) {
     Serial.print("Kunne ikke finne PN53x-kortet");
     while (1); // halt
@@ -267,10 +276,26 @@ void setup() {
   Serial.print("Firmware ver. "); Serial.print((versiondata>>16) & 0xFF, DEC); 
   Serial.print('.'); Serial.println((versiondata>>8) & 0xFF, DEC);
   
-  // configure board to read RFID tags
-  nfc.SAMConfig();
+  // configure board to read RFID tags  
   
   Serial.println("Venter på ISO14443A-kort...");  
+}
+
+void sendResultsToMobile() {
+  // start card emulation to let mobile read results
+  Serial.println("------- Send results --------");
+  
+  message = NdefMessage();
+  message.addUriRecord("vg.no/r?12345678901234567890");
+  messageSize = message.getEncodedSize();
+  if (messageSize > sizeof(ndefBuf)) {
+      Serial.println("ndefBuf is too small");
+      while (1) { }
+  }
+  message.encode(ndefBuf);
+  tagEmulator.setNdefFile(ndefBuf, messageSize); 
+  tagEmulator.emulate(10000);
+  Serial.print("Send time ended");
 }
 
 void loop(void) {
@@ -281,18 +306,9 @@ void loop(void) {
   // Wait for an ISO14443A type cards (Mifare, etc.).  When one is found
   // 'uid' will be populated with the UID, and uidLength will indicate
   // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
-  success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength);
+  success = reader.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 100);
   
   if (success) {    
-    // Display some basic information about the card
-    /*Serial.println("Found an ISO14443A card");
-    Serial.print("  UID Length: ");
-    Serial.print(uidLength, DEC);
-    Serial.println(" bytes");
-    Serial.print("  UID Value: ");
-    nfc.PrintHex(uid, uidLength);
-    Serial.println("");*/
-
     // Get LSBs of chip as a long.
     // UID may be 4 or 7 bytes long so we need to know the length to take the last bytes. We chop off the
     // 24 MSBs if this is a 8 bytes long address, but even then it would be extremely surprising if we get an
@@ -307,6 +323,8 @@ void loop(void) {
       startRun();
     } else if(longId == endId){
       endRun();
+      sendResultsToMobile();
+      delay(1000);      
     } else {
       checkIn(longId);   
     }
