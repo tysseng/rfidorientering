@@ -1,55 +1,37 @@
 #include "emulatetag.h"
 #include "NdefMessage.h"
+#include "debug.h"
+#include "sound.h"
+#include "led.h"
+#include "config.h"
 
 #include <SPI.h>
 #include <PN532_SPI.h>
 #include <PN532Interface.h>
 #include <PN532.h>
 
-PN532_SPI interface(SPI, 10);
-EmulateTag tagEmulator(interface); // Create EmulateTag instance called nfc
+const String RESULTS_URL = "vg.no/r?r=";
 
+// The following must be added to the library header PN532/emulatetag.h, under public:
+//   PN532 getPn532();
 PN532 EmulateTag::getPn532(){
    return pn532;
 }
+
+PN532_SPI interface(SPI, SPI_SS_PIN);
+EmulateTag tagEmulator(interface);
 PN532 reader = tagEmulator.getPn532();
 
-// The following must be added to PN532/emulatetag.cpp:
-// PN532 EmulateTag::getPn532(){
-//   return pn532;
-// }
-
-
-
+uint8_t uid[3] = { 0x12, 0x34, 0x56 };
 uint8_t ndefBuf[120];
 NdefMessage message;
 int messageSize;
 
-uint8_t uid[3] = { 0x12, 0x34, 0x56 };
+const unsigned int MODE_READER = 1;
+const unsigned int MODE_TAG = 2;
+unsigned int mode = MODE_READER;
+const short postCount = 4;
 
-const int D_4 = 261;
-const int E_4 = 293;
-const int F_4 = 349;
-const int G_4 = 392;
-const int G_4_SHARP = 415;
-const int A_4 = 440;
-const int C_5 = 523;
-const int E_5 = 659;
-const int G_5 = 784;
-const int A_5 = 880;
-const int C_6 = 1046;
-
-const short len16th = 1;
-const short len8th = 2;
-const short lenQuarter = 4;
-const short lenHalf = 8;
-
-// CONFIG
-int PIEZO_PIN = 9;
-int LED_PIN = 8;
-
-
-const int postCount = 4;
 unsigned long posts[] = {
   2380092371,
   2429244883,
@@ -68,6 +50,40 @@ unsigned long startTime;
 unsigned long endTime;
 unsigned long lastCheckinTime = -1;
 
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(LED1_PIN, OUTPUT);
+  pinMode(LED2_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(PIEZO_PIN, OUTPUT);
+
+  #ifndef ESP8266
+    while (!Serial); // for Leonardo/Micro/Zero
+  #endif
+
+  #ifdef DEBUG
+    Serial.begin(115200);
+  #endif
+
+  // uid must be 3 bytes!
+  tagEmulator.setUid(uid);  
+  tagEmulator.init();
+
+  uint32_t versiondata = reader.getFirmwareVersion();
+  if (! versiondata) {
+    DMSG("Kunne ikke finne PN53x-kortet");
+    while (1); // halt
+  }
+  // Got ok data, print it out!
+  DMSG("Fant PN5-chip"); DMSG_HEX((versiondata>>24) & 0xFF); 
+  DMSG("Firmware ver. "); DMSG((versiondata>>16) & 0xFF, DEC); 
+  DMSG('.'); DMSG_INT((versiondata>>8) & 0xFF);
+  
+  // configure board to read RFID tags  
+  
+  DMSG_STR("Venter på ISO14443A-kort...");  
+}
+
 int getPostIndex(long id) {
   for(int i=0; i<postCount; i++){
     if(posts[i] == id){
@@ -75,20 +91,6 @@ int getPostIndex(long id) {
     }
   }
   return postCount;
-}
-
-void flashLed(int onDelay, int offDelay){
-  digitalWrite(LED_PIN, HIGH);
-  delay(onDelay);             
-  digitalWrite(LED_PIN, LOW); 
-  delay(offDelay);  
-}
-
-void play(int freq, short toneLength, short toneSpacing) {
-  short toneOn = 75 * toneLength;
-  short toneOff = 75 * toneSpacing - toneOn;
-  tone(PIEZO_PIN, freq, toneOn); 
-  flashLed(toneOn, toneOff);
 }
 
 void indicateStart() {
@@ -107,7 +109,6 @@ void indicateEnd() {
   play(C_6, lenQuarter, lenHalf);
 }
 
-
 void indicateNotRunning() {
   play(C_5, len8th, lenQuarter);
   play(C_5, len8th, lenQuarter);
@@ -124,7 +125,7 @@ void indicateSuccess() {
 
 void indicateDuplicate() {
   for(byte i = 0; i < 4; i++){
-    play(A_5, len8th, lenQuarter); 
+    play(C_5, len16th, lenQuarter); 
   }
 }
 
@@ -137,13 +138,13 @@ void indicateUnknown() {
 }
 
 void printId(unsigned long id){
-  Serial.print(" (");    
-  Serial.print(id, DEC);    
-  Serial.println(")"); 
+  DMSG(" (");    
+  DMSG(id, DEC);    
+  DMSG_STR(")"); 
 }
 
 void startRun() {
-  Serial.println("Klar, ferdig, gå! Ha et morsomt løp!");
+  DMSG_STR("Klar, ferdig, gå! Ha et morsomt løp!");
   isRunning = true;
   indicateStart();
 
@@ -152,14 +153,14 @@ void startRun() {
     checkintimes[i] = 0;    
   }
   startTime = millis();
-  delay(3000);
+  delay(DELAY_AFTER_START);
 }
 
 void checkIn(long id){
 
   if(!isRunning){
     indicateNotRunning();
-    delay(3000);
+    delay(DELAY_AFTER_NOT_RUNNING);
     return;  
   }
   
@@ -167,9 +168,9 @@ void checkIn(long id){
   
   if(index == postCount){
     indicateUnknown();
-    Serial.print("Ukjent id");
+    DMSG("Ukjent id");
     printId(id);
-    delay(3000);
+    delay(DELAY_AFTER_UNKNOWN);
     return;
   }
 
@@ -177,20 +178,21 @@ void checkIn(long id){
   // without updating checkin status/time if post has already been checked.
   if(checkins[index] == true) {
     if(lastCheckinTime < millis() - 3000){ 
-      Serial.print("Sjekket inn tidligere");     
+      DMSG("Sjekket inn tidligere");     
       printId(id); 
       indicateDuplicate();
     } else {
-      Serial.print("For kort tid siden sist");
+      DMSG("For kort tid siden sist");
       printId(id);
-      delay(2000);
+      delay(DELAY_AFTER_TOO_SOON_REPEAT);
       return;
     }
   } else {
     checkins[index] = true;
     checkintimes[index] = millis() - startTime;  
-    Serial.print("Sjekker inn post ");
-    Serial.print(index + 1, DEC);    
+
+    DMSG("Sjekker inn post ");
+    DMSG(index + 1, DEC);    
     printId(id);
     indicateSuccess();    
   }
@@ -202,41 +204,63 @@ void printTime(long aTime){
   int totalSeconds = aTime / 1000;
   int secondsPart = totalSeconds % 60;
   int minutesPart = totalSeconds / 60;
-  Serial.print(minutesPart, DEC);
-  Serial.print(" min ");
-  Serial.print(secondsPart, DEC);
-  Serial.print(" sek");
+  DMSG(minutesPart, DEC);
+  DMSG(" min ");
+  DMSG(secondsPart, DEC);
+  DMSG(" sek");
 }
 
 void getResults() {
-  Serial.println("Resultat:");
-  Serial.print("  Total tid: ");
+  DMSG_STR("Resultat:");
+  DMSG("  Total tid: ");
   printTime(endTime - startTime);
-  Serial.println();
-  Serial.println();
+  DMSG_STR();
+  DMSG_STR();
   
-  Serial.println("Passeringstider, poster:");
+  DMSG_STR("Passeringstider, poster:");
   bool success = true;
   for(int i=0; i<postCount; i++){ 
-    Serial.print("  ");
-    Serial.print(i+1, DEC);   
+    DMSG("  ");
+    DMSG(i+1, DEC);   
     if(checkins[i] == true){    
-      Serial.print(": Funnet etter ");
+      DMSG(": Funnet etter ");
       printTime(checkintimes[i]);  
-      Serial.println();
+      DMSG_STR();
     } else {
-      Serial.println(": Ikke funnet");
+      DMSG_STR(": Ikke funnet");
       success = false;
     }
   }
 
-  Serial.println();
+  DMSG_STR();
 
   if(success == true){
-    Serial.println("Gratulerer, du fant alle postene!");
+    DMSG_STR("Gratulerer, du fant alle postene!");
   } else {
-    Serial.println("Du fant ikke alle postene, men godt jobbet likevel!");
+    DMSG_STR("Du fant ikke alle postene, men godt jobbet likevel!");
   }
+}
+
+String getAsPaddedHex(int number){
+  if(number < 16){
+    return String("000" + String(number, HEX));
+  } else if(number < 256){
+    return String("00" + String(number, HEX));
+  } else if(number < 8192){
+    return String("0" + String(number, HEX));
+  } else {
+    return String(number, HEX);
+  }
+}
+
+String getResultsString() { 
+  String result = String(WATCH_ID, HEX);
+
+  // get results in tenths.
+  for(unsigned short i=0; i<postCount; i++){
+    result = String(result + getAsPaddedHex(checkintimes[i] / 100));
+  }
+  return result;
 }
 
 void endRun() {
@@ -244,90 +268,86 @@ void endRun() {
     endTime = millis();
     isRunning = false;
   }
-  Serial.println("Gratulerer, du er i mål!"); 
-  Serial.println(""); 
-  getResults(); 
-  indicateEnd();
-  delay(3000);
-}
-
-void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(PIEZO_PIN, OUTPUT);
-
-  #ifndef ESP8266
-    while (!Serial); // for Leonardo/Micro/Zero
+  DMSG_STR("Gratulerer, du er i mål!"); 
+  DMSG_STR(""); 
+  #ifdef DEBUG
+    getResults(); 
+    DMSG_STR(getResultsString());
   #endif
-  Serial.begin(115200);
-  Serial.println("Starter orienteringsklokke");
-
-  // uid must be 3 bytes!
-  tagEmulator.setUid(uid);  
-  tagEmulator.init();
-
-  uint32_t versiondata = reader.getFirmwareVersion();
-  if (! versiondata) {
-    Serial.print("Kunne ikke finne PN53x-kortet");
-    while (1); // halt
-  }
-  // Got ok data, print it out!
-  Serial.print("Fant PN5-chip"); Serial.println((versiondata>>24) & 0xFF, HEX); 
-  Serial.print("Firmware ver. "); Serial.print((versiondata>>16) & 0xFF, DEC); 
-  Serial.print('.'); Serial.println((versiondata>>8) & 0xFF, DEC);
-  
-  // configure board to read RFID tags  
-  
-  Serial.println("Venter på ISO14443A-kort...");  
+  indicateEnd();
+  delay(DELAY_AFTER_END_RUN);
 }
 
 void sendResultsToMobile() {
   // start card emulation to let mobile read results
-  Serial.println("------- Send results --------");
+  DMSG_STR("------- Send results --------");
+  
+  flashLed(100, 100);
+  flashLed(100, 100);
+  flashLed(100, 100);  
   
   message = NdefMessage();
-  message.addUriRecord("vg.no/r?12345678901234567890");
+  message.addUriRecord(String(RESULTS_URL + getResultsString()));
   messageSize = message.getEncodedSize();
   if (messageSize > sizeof(ndefBuf)) {
-      Serial.println("ndefBuf is too small");
+      DMSG_STR("ndefBuf is too small");
       while (1) { }
   }
   message.encode(ndefBuf);
   tagEmulator.setNdefFile(ndefBuf, messageSize); 
+
+  digitalWrite(LED1_PIN, LED_ON);
   tagEmulator.emulate(10000);
-  Serial.print("Send time ended");
+  DMSG("Send time ended");
+  digitalWrite(LED1_PIN, LED_OFF); 
 }
 
-void loop(void) {
+unsigned long getTagUidAsLong(uint8_t uid[], uint8_t uidLength) {
+  // Get LSBs of chip as a long.
+  // UID may be 4 or 7 bytes long so we need to know the length to take the last bytes. We chop off the
+  // 24 MSBs if this is a 8 bytes long address, but even then it would be extremely surprising if we get an
+  // address collision.
+  unsigned long longId = 0;
+  longId += (long) uid[uidLength-4] << 24;
+  longId += (long) uid[uidLength-3] << 16;
+  longId += (long) uid[uidLength-2] << 8;
+  longId += uid[uidLength-1];
+  return longId;
+}
+
+void scanForTag(){
   uint8_t success;
   uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  // Buffer to store the returned UID
   uint8_t uidLength;                        // Length of the UID (4 or 7 bytes depending on ISO14443A card type)
-    
+
   // Wait for an ISO14443A type cards (Mifare, etc.).  When one is found
   // 'uid' will be populated with the UID, and uidLength will indicate
   // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
   success = reader.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 100);
   
   if (success) {    
-    // Get LSBs of chip as a long.
-    // UID may be 4 or 7 bytes long so we need to know the length to take the last bytes. We chop off the
-    // 24 MSBs if this is a 8 bytes long address, but even then it would be extremely surprising if we get an
-    // address collision.
-    unsigned long longId = 0;
-    longId += (long) uid[uidLength-4] << 24;
-    longId += (long) uid[uidLength-3] << 16;
-    longId += (long) uid[uidLength-2] << 8;
-    longId += uid[uidLength-1];
-
+    unsigned long longId = getTagUidAsLong(uid, uidLength);
     if(longId == startId){
       startRun();
     } else if(longId == endId){
-      endRun();
-      sendResultsToMobile();
-      delay(1000);      
+      endRun();             
     } else {
       checkIn(longId);   
     }
+  }
+}
+
+void loop(void) {
+  if (BUTTON_ON == digitalRead(BUTTON_PIN)){
+    mode = MODE_TAG;
+  }
+
+  if(mode == MODE_READER) {    
+    scanForTag();
+  } else if(mode == MODE_TAG) {
+    sendResultsToMobile();
+    mode = MODE_READER;
+    delay(DELAY_AFTER_RESULTS_SENT); 
   }
  
 }
